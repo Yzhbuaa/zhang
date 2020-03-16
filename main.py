@@ -7,6 +7,7 @@ from utils.timer import timer
 
 
 def calibrate():
+    # reads all data(points's coordinate in both image coordinate system and world coordinate system
     data = parse_data()
 
     end = timer()
@@ -34,7 +35,7 @@ def calibrate():
         intrinsics,
         extrinsics,
         data["real"],
-        data["sensed"]
+        data["observed"]
     )
     end("Distortion")
 

@@ -3,159 +3,143 @@ from scipy import optimize as opt
 from utils.timer import timer
 
 
-def get_normalisation_matrix(flattened_corners):
+def get_normalization_matrix(points):
     end = timer()
+    #  TODO::add infinite points judgement
 
-    avg_x = flattened_corners[:, 0].mean()
-    avg_y = flattened_corners[:, 1].mean()
+    u_x = points[:, 0].mean()  # Centroid
+    u_y = points[:, 1].mean()
 
-    s_x = np.sqrt(2 / flattened_corners[0].std())
-    s_y = np.sqrt(2 / flattened_corners[1].std())
+    x_shifted = points[:, 0] - u_x  # shift origin to centroid
+    y_shifted = points[:, 1] - u_y
+
+    average_distance_from_origin = np.sqrt(x_shifted**2+y_shifted**2).mean()
+
+    scale = np.sqrt(2)/average_distance_from_origin
 
     end("get_normalization_matrix")
-    return np.matrix([
-        [s_x,   0,   -s_x * avg_x],
-        [0,   s_y,   -s_y * avg_y],
-        [0,     0,              1]
+
+    return np.array([
+        [scale,   0,   -scale * u_x],
+        [0,   scale,   -scale * u_y],
+        [0,       0,              1]
     ])
 
 
-def estimate_homography(first, second):
+def estimate_homography(real, observed):
     end = timer()
 
-    first_normalisation_matrix = get_normalisation_matrix(first)
-    second_normalisation_matrix = get_normalisation_matrix(second)
+    real_normalization_matrix = get_normalization_matrix(real)
+    observed_normalization_matrix = get_normalization_matrix(observed)
 
-    M = []
+    l = []  # using list rather than numpy.array to efficiently construct the parameter matrix step by step.
 
-    for j in range(0, first.size / 2):
-        homogeneous_first = np.array([
-            first[j][0],
-            first[j][1],
+    for j in range(0, int(real.size / 2)):  # for each point in image j = 0,1,...,255
+        homogeneous_real = np.array([
+            real[j][0],
+            real[j][1],
             1
         ])
 
-        homogeneous_second = np.array([
-            second[j][0],
-            second[j][1],
+        homogeneous_observed = np.array([
+            observed[j][0],
+            observed[j][1],
             1
         ])
 
-        pr_1 = np.dot(first_normalisation_matrix, homogeneous_first)
+        normalized_homogeneous_real = np.dot(real_normalization_matrix, homogeneous_real)
 
-        pr_2 = np.dot(second_normalisation_matrix, homogeneous_second)
+        normalized_homogeneous_observed = np.dot(observed_normalization_matrix, homogeneous_observed)
 
-        M.append(np.array([
-            pr_1.item(0), pr_1.item(1), 1,
+        l.append(np.array([
+            normalized_homogeneous_real.item(0), normalized_homogeneous_real.item(1), 1,
             0, 0, 0,
-            -pr_1.item(0)*pr_2.item(0), -pr_1.item(1)*pr_2.item(0), -pr_2.item(0)
+            -normalized_homogeneous_real.item(0)*normalized_homogeneous_observed.item(0), -normalized_homogeneous_real.item(1)*normalized_homogeneous_observed.item(0), -normalized_homogeneous_observed.item(0)
         ]))
 
-        M.append(np.array([
-            0, 0, 0, pr_1.item(0), pr_1.item(1),
-            1, -pr_1.item(0)*pr_2.item(1), -pr_1.item(1)*pr_2.item(1), -pr_2.item(1)
+        l.append(np.array([
+            0, 0, 0,
+            normalized_homogeneous_real.item(0), normalized_homogeneous_real.item(1), 1,
+            -normalized_homogeneous_real.item(0)*normalized_homogeneous_observed.item(1), -normalized_homogeneous_real.item(1)*normalized_homogeneous_observed.item(1), -normalized_homogeneous_observed.item(1)
         ]))
 
-    U, S, Vh = np.linalg.svd(np.array(M).reshape((512, 9)))
+    u, s, vh = np.linalg.svd(np.array(l))
 
-    L = Vh[-1]
+    x_t = vh[-1]
 
-    H = L.reshape(3, 3)
+    h = x_t.reshape(3, 3)
 
-    denormalised = np.dot(
-        np.dot(
-            np.linalg.inv(first_normalisation_matrix),
-            H
-        ),
-        second_normalisation_matrix
-    )
+    denormalized_h = np.linalg.inv(observed_normalization_matrix) @ h @ real_normalization_matrix
 
     end("estimate_homography")
-    return denormalised / denormalised[-1, -1]
+    return denormalized_h / denormalized_h[-1, -1]
 
 
-def cost(homography, data):
-    [sensed, real] = data
+# 返回估计坐标与真实坐标偏差
+def difference_value_calculate(estimated_homography, observed, real):
+    estimated_coordinates = []
+    for i in range(len(real)):
+        single_real = np.array([real[i, 0], real[i, 1], 1])
+        estimated_coordinate = np.dot(estimated_homography.reshape(3, 3), single_real)
+        estimated_coordinate /= estimated_coordinate[-1]
+        estimated_coordinates.append(estimated_coordinate[:2])
 
-    Y = []
+    aa = np.array(estimated_coordinates).reshape(-1)
+    difference_value = (observed.reshape(-1) - np.array(estimated_coordinates).reshape(-1))
 
-    for i in range(0, sensed.size / 2):
-        x = sensed[i][0]
-        y = sensed[i][1]
-
-        w = homography[6] * x + homography[7] * y + homography[8]
-
-        M = np.array([
-            [homography[0], homography[1], homography[2]],
-            [homography[3], homography[4], homography[5]]
-        ])
-
-        homog = np.transpose(np.array([x, y, 1]))
-        [u, v] = (1/w) * np.dot(M, homog)
-
-        Y.append(u)
-        Y.append(v)
-
-    return np.array(Y)
+    return difference_value
 
 
-def jac(homography, data):
-    [sensed, real] = data
-
+# 返回对应jacobian矩阵
+def jacobian(homography_initial_guess, observed_coordinates, real_coordinates):
     J = []
+    for i in range(len(real_coordinates)):
+        sx = homography_initial_guess[0] * real_coordinates[i][0] + homography_initial_guess[1] * real_coordinates[i][1] + homography_initial_guess[2]
+        sy = homography_initial_guess[3] * real_coordinates[i][0] + homography_initial_guess[4] * real_coordinates[i][1] + homography_initial_guess[5]
+        w = homography_initial_guess[6] * real_coordinates[i][0] + homography_initial_guess[7] * real_coordinates[i][1] + homography_initial_guess[8]
+        w2 = w * w
 
-    for i in range(0, sensed.size / 2):
-        x = sensed[i][0]
-        y = sensed[i][1]
+        J.append(np.array([real_coordinates[i][0] / w, real_coordinates[i][1] / w, 1 / w,
+                           0, 0, 0,
+                           -sx * real_coordinates[i][0] / w2, -sx * real_coordinates[i][1] / w2, -sx / w2]))
 
-        s_x = homography[0] * x + homography[1] * y + homography[2]
-        s_y = homography[3] * x + homography[4] * y + homography[5]
-        w = homography[6] * x + homography[7] * y + homography[8]
-
-        J.append(
-            np.array([
-                x / w, y / w, 1/w,
-                0, 0, 0,
-                (-s_x * x) / (w*w), (-s_x * y) / (w*w), -s_x / (w*w)
-            ])
-        )
-
-        J.append(
-            np.array([
-                0, 0, 0,
-                x / w, y / w, 1 / w,
-                (-s_y * x) / (w*w), (-s_y * y) / (w*w), -s_y / (w*w)
-            ])
-        )
+        J.append(np.array([0, 0, 0,
+                           real_coordinates[i][0] / w, real_coordinates[i][1] / w, 1 / w,
+                           -sy * real_coordinates[i][0] / w2, -sy * real_coordinates[i][1] / w2, -sy / w2]))
 
     return np.array(J)
 
 
-def refine_homography(homography, sensed, real):
-    return opt.root(
-        cost,
-        homography,
-        jac=jac,
-        args=[sensed, real],
-        method='lm'
-    ).x
+# 利用Levenberg Marquart算法微调H
+def refine_homography(real, observed, homography_initial_guess):
+    homography_initial_guess = np.array(homography_initial_guess)
+    refined_homography = opt.leastsq(difference_value_calculate,
+                                     homography_initial_guess,
+                                     Dfun=jacobian,
+                                     args=(observed, real))[0]
+
+    refined_homography /= np.array(refined_homography[-1])
+    return refined_homography
 
 
 def compute_homography(data):
-    end = timer()
+    end = timer()  # records the current time which will further be used to calculate the total time of calculation.
 
     real = data['real']
 
     refined_homographies = []
 
-    for i in range(0, len(data['sensed'])):
-        sensed = data['sensed'][i]
-        estimated = estimate_homography(real, sensed)
+    for i in range(0, len(data['observed'])):  # for each image in observed 5 images
+        observed = data['observed'][i]
+        initial_guess = estimate_homography(real, observed)
+
         end = timer()
-        refined = refine_homography(estimated, sensed, real)
-        refined = refined / refined[-1]
+        refined_homography = refine_homography(real,observed,initial_guess)
         end("refine_homography")
-        refined_homographies.append(estimated)
+
+        refined_homographies.append(refined_homography)
 
     end("compute_homography")
     return np.array(refined_homographies)
+
+

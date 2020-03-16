@@ -2,16 +2,15 @@ import numpy as np
 from utils.timer import timer
 
 
-
-def v(p, q, H):
+def v(p, q, h):
 
     return np.array([
-        H[0, p] * H[0, q],
-        H[0, p] * H[1, q] + H[1, p] * H[0, q],
-        H[1, p] * H[1, q],
-        H[2, p] * H[0, q] + H[0, p] * H[2, q],
-        H[2, p] * H[1, q] + H[1, p] * H[2, q],
-        H[2, p] * H[2, q]
+        h[0, p] * h[0, q],
+        h[0, p] * h[1, q] + h[1, p] * h[0, q],
+        h[1, p] * h[1, q],
+        h[2, p] * h[0, q] + h[0, p] * h[2, q],
+        h[2, p] * h[1, q] + h[1, p] * h[2, q],
+        h[2, p] * h[2, q]
     ])
 
 
@@ -22,34 +21,26 @@ def get_camera_intrinsics(homographies):
     vec = []
 
     for i in range(0, h_count):
-        curr = np.reshape(homographies[i], (3, 3))
+        h = np.reshape(homographies[i], (3, 3))
 
-        vec.append(v(0, 1, curr))
-        vec.append(v(0, 0, curr) - v(1, 1, curr))
+        vec.append(v(0, 1, h))
+        vec.append(v(0, 0, h) - v(1, 1, h))
 
     vec = np.array(vec)
 
-    b = np.linalg.lstsq(
-        vec,
-        np.zeros(h_count * 2),
-    )[-1]
+    u, s, vh = np.linalg.svd(vec)  # TODO:: mathmatic
 
-    w = b[0] * b[2] * b[5] - b[1]**2 * b[5] - b[0] * b[4]**2 + 2 * b[1] * b[3] * b[4] - b[2] * b[3]**2
-    d = b[0] * b[2] - b[1]**2
+    b = vh[-1]  # the last row of vh, the last column of v
 
-    # if (d < 0):
-    #     d = 0.01
-    d = -d
-
-    #
-    alpha = np.sqrt(w / (d * b[0]))
-    beta = np.sqrt(w / d**2 * b[0])
-    gamma = np.sqrt(w / (d**2 * b[0])) * b[1]
-    uc = (b[1] * b[4] - b[2] * b[3]) / d
-    vc = (b[1] * b[3] - b[0] * b[4]) / d
+    v0 = (b[1] * b[3] - b[0] * b[4])/(b[0] * b[2] - b[1]**2)
+    lamb = b[5] - (b[3]**2 + v0 * (b[1] * b[3] - b[0] * b[4]))/b[0]
+    alpha = np.sqrt(lamb/b[0])
+    beta = np.sqrt(lamb * b[0] / (b[0] * b[2] - b[1]**2))
+    gamma = -b[1] * alpha**2 * beta / lamb
+    u0 = gamma * v0 / alpha - b[3] * alpha**2 /lamb
 
     return np.array([
-        [alpha, gamma, uc],
-        [0,     beta,  vc],
+        [alpha, gamma, u0],
+        [0,     beta,  v0],
         [0,     0,      1]
     ])
