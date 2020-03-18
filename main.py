@@ -4,7 +4,7 @@ from steps.intrinsics import get_camera_intrinsics
 from steps.extrinsics import get_camera_extrinsics
 from steps.distortion import estimate_lens_distortion
 from utils.timer import timer
-
+from steps.refine_all import refinall_all_param
 
 def calibrate():
     # reads all data(points's coordinate in both image coordinate system and world coordinate system
@@ -38,6 +38,10 @@ def calibrate():
         data["observed"]
     )
     end("Distortion")
+
+    end = timer()
+    [refined_intrinsics_parameter, refined_distortion_parameter, refined_extrinsic_parameter] = \
+        refinall_all_param(intrinsics, distortion, extrinsics, data['real'], data['observed'])
 
     return
 

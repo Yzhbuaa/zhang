@@ -48,9 +48,6 @@ def estimate_lens_distortion(intrinsics, extrinsics, model, sensor):
             d.append(up - u)
             d.append(vp - v)
 
-    k = np.linalg.lstsq(
-        np.array(D),
-        np.array(d)
-    )
+    k = np.linalg.inv(np.transpose(D) @ D) @ np.transpose(D) @ d
 
     return k

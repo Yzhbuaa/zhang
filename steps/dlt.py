@@ -113,10 +113,12 @@ def jacobian(homography_initial_guess, observed_coordinates, real_coordinates):
 # 利用Levenberg Marquart算法微调H
 def refine_homography(real, observed, homography_initial_guess):
     homography_initial_guess = np.array(homography_initial_guess)
-    refined_homography = opt.leastsq(difference_value_calculate,
-                                     homography_initial_guess,
-                                     Dfun=jacobian,
-                                     args=(observed, real))[0]
+    homography_initial_guess = homography_initial_guess.reshape(-1)
+    # refined_homography = opt.leastsq(difference_value_calculate,
+    #                                  homography_initial_guess,
+    #                                  Dfun=jacobian,
+    #                                  args=(observed, real))[0]
+    refined_homography = opt.least_squares(difference_value_calculate, homography_initial_guess, args=(observed, real), method='lm').x
 
     refined_homography /= np.array(refined_homography[-1])
     return refined_homography
